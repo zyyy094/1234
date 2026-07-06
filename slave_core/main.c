@@ -7,9 +7,14 @@
  *
  * 启动流程:
  *   1. Linux 通过 remoteproc 加载本 ELF 到从核
- *   2. 从核启动: 硬件初始化 → RPMsg 初始化 → 等待命令
+ *   2. 从核启动: 硬件初始化 → RPMsg 初始化 → 命令循环
  *   3. 主核 fire_detect 打开 /dev/rpmsg0 发送命令
  *   4. 从核收到命令 → 控制 LED/蜂鸣器
+ *   5. 从核定时轮询火焰传感器 → 主动上报给主核
+ *
+ * 双向通信:
+ *   主→从: 'R'/'r'/'Y'/'y'/'G'/'g'/'B'/'b'/'S'/'H'
+ *   从→主: 'F' 火焰警报, 'f' 火焰解除, 'h' 心跳回复
  */
 
 #include <stdio.h>
@@ -41,6 +46,7 @@ int main(void)
     }
     printf("      LED: FGPIO4 pin 13/14/15\r\n");
     printf("      Buzzer: PWM2 CH0\r\n");
+    printf("      Flame sensor: FGPIO2 pin 10\r\n");
 
     /* 2. 初始化 RPMsg 通信 */
     printf("[2/3] Initializing RPMsg...\r\n");

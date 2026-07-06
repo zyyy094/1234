@@ -3,11 +3,15 @@
  *
  * 基于 SDK openamp_for_linux 示例改造
  * 接收主核(Linux)的单字符命令，控制从核硬件
+ * 同时定时轮询火焰传感器，主动上报状态给主核
  *
  * 架构:
  *   Linux 主核 --/dev/rpmsg0--> RPMsg virtio --> 从核回调 --> 硬件控制
+ *   从核定时器 --> 轮询火焰传感器 --> 主动 rpmsg_send() --> 主核
  *
- * 协议: 单字符命令（与 hardware.cpp sendCmd() 兼容）
+ * 协议:
+ *   主→从: 单字符命令 ('R','r','Y','y','G','g','B','b','S','H')
+ *   从→主: 'F' 火焰警报, 'f' 火焰解除, 'h' 心跳回复
  */
 
 #include "rpmsg_handler.h"
@@ -35,9 +39,14 @@
 
 /* ====================== 全局变量 ====================== */
 static volatile int shutdown_req = 0;
+static struct rpmsg_endpoint *g_ept = NULL;
 
 struct remoteproc remoteproc_slave;
 static struct rpmsg_device *rpdev_slave = NULL;
+
+/* 火焰传感器状态追踪 */
+static int last_flame_state = 0;
+static u32 last_sensor_poll = 0;
 
 /* ====================== 资源表（与 Linux 协商一致） ====================== */
 static struct remote_resource_table __resource resources __attribute__((used)) = {
@@ -93,6 +102,41 @@ struct remoteproc_priv slave_priv = {
     .share_mem_attribute = SLAVE00_SHARE_BUFFER_ATTRIBUTE,
 };
 
+/* ====================== 主动上报函数 ====================== */
+static void send_to_master(char cmd)
+{
+    if (g_ept && is_rpmsg_ept_ready(g_ept)) {
+        rpmsg_send(g_ept, &cmd, 1);
+    }
+}
+
+/* 轮询火焰传感器，状态变化时主动上报 */
+static void poll_flame_sensor(void)
+{
+    int cur_flame = flame_sensor_read();
+
+    if (cur_flame != last_flame_state) {
+        if (cur_flame) {
+            /* 检测到火焰 - 主动上报 + 本地报警 */
+            RPMSG_DEBUG_I("Flame detected! Alerting master...");
+            send_to_master(CMD_FIRE_ALERT);
+
+            /* 从核立即触发本地报警（不等主核命令） */
+            led_red_on();
+            buzzer_on();
+        } else {
+            /* 火焰消失 - 通知主核 + 本地解除 */
+            RPMSG_DEBUG_I("Flame cleared. Notifying master...");
+            send_to_master(CMD_FIRE_CLEAR);
+
+            led_red_off();
+            buzzer_off();
+            led_green_on();  /* 恢复绿灯 */
+        }
+        last_flame_state = cur_flame;
+    }
+}
+
 /* ====================== 命令处理 ====================== */
 static void process_command(char cmd)
 {
@@ -113,6 +157,15 @@ static void process_command(char cmd)
         case CMD_ALL_OFF:
             led_all_off();
             buzzer_off();
+            break;
+
+        /* 心跳请求: 回复心跳 + 当前传感器状态 */
+        case CMD_HEARTBEAT:
+            send_to_master(CMD_HEARTBEAT_ACK);
+            /* 附带传感器状态 */
+            if (last_flame_state) {
+                send_to_master(CMD_FIRE_ALERT);
+            }
             break;
 
         default:
@@ -149,6 +202,7 @@ static void rpmsg_service_unbind(struct rpmsg_endpoint *ept)
 {
     (void)ept;
     RPMSG_DEBUG_W("Remote endpoint destroyed.");
+    g_ept = NULL;
     shutdown_req = 1;
 }
 
@@ -156,7 +210,7 @@ static void rpmsg_service_unbind(struct rpmsg_endpoint *ept)
 static int rpmsg_app_run(struct rpmsg_device *rdev, void *priv)
 {
     int ret;
-    struct rpmsg_endpoint lept = {0};
+    static struct rpmsg_endpoint lept = {0};
 
     shutdown_req = 0;
     RPMSG_DEBUG_I("Creating rpmsg endpoint...");
@@ -169,6 +223,7 @@ static int rpmsg_app_run(struct rpmsg_device *rdev, void *priv)
         return -1;
     }
 
+    g_ept = &lept;
     RPMSG_DEBUG_I("Endpoint created. Waiting for commands...");
 
     /* 等待 Linux 端连接 */
@@ -178,10 +233,20 @@ static int rpmsg_app_run(struct rpmsg_device *rdev, void *priv)
     }
 
     RPMSG_DEBUG_I("Linux master connected!");
+    RPMSG_DEBUG_I("Flame sensor polling active (interval=%dms)", SENSOR_POLL_INTERVAL_MS);
 
-    /* 主循环：轮询等待消息 */
+    /* 主循环：轮询 RPMsg 消息 + 定时轮询传感器 */
     while (1) {
+        /* 处理 RPMsg 消息 */
         platform_poll(priv);
+
+        /* 定时轮询火焰传感器 */
+        u32 now = metal_get_timestamp();
+        if (now - last_sensor_poll >= SENSOR_POLL_INTERVAL_MS) {
+            poll_flame_sensor();
+            last_sensor_poll = now;
+        }
+
         if (shutdown_req || rproc_get_stop_flag()) {
             rproc_clear_stop_flag();
             break;
@@ -189,6 +254,7 @@ static int rpmsg_app_run(struct rpmsg_device *rdev, void *priv)
     }
 
     rpmsg_destroy_ept(&lept);
+    g_ept = NULL;
     RPMSG_DEBUG_I("Endpoint destroyed.");
     return 0;
 }
@@ -222,7 +288,12 @@ int rpmsg_handler_init(void)
         return -1;
     }
 
-    RPMSG_DEBUG_I("RPMsg initialized.");
+    /* 初始化传感器状态 */
+    last_flame_state = flame_sensor_read();
+    last_sensor_poll = metal_get_timestamp();
+
+    RPMSG_DEBUG_I("RPMsg initialized. Flame sensor state: %s",
+                  last_flame_state ? "FIRE" : "clear");
     return 0;
 }
 

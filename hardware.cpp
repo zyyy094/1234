@@ -4,10 +4,11 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <iostream>
+#include <poll.h>
 
 using namespace std;
 
-// ====================== GPIO 火焰传感器 ======================
+// ====================== GPIO 火焰传感器（主核直读，兼容模式） ======================
 static struct gpiod_chip* g_chip = nullptr;
 static struct gpiod_line* g_line = nullptr;
 
@@ -48,6 +49,7 @@ void releaseFlameSensor() {
 
 // ====================== RPMsg ======================
 static int rpmsg_fd = -1;
+static bool slave_flame_alert = false;  // 从核上报的火焰状态
 
 bool initRpmsg() {
     rpmsg_fd = open("/dev/rpmsg0", O_RDWR);
@@ -83,6 +85,53 @@ void setLed(char color) {
 
 void setBuzzer(bool on) {
     sendCmd(on ? 'B' : 'b');
+}
+
+// ====================== 从核回传数据接收 ======================
+
+// 非阻塞读取从核上报的消息
+void pollSlaveMessages() {
+    if (rpmsg_fd < 0) return;
+
+    struct pollfd pfd;
+    pfd.fd = rpmsg_fd;
+    pfd.events = POLLIN;
+
+    while (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
+        char buf[64];
+        ssize_t n = read(rpmsg_fd, buf, sizeof(buf));
+        if (n <= 0) break;
+
+        for (ssize_t i = 0; i < n; i++) {
+            char cmd = buf[i];
+            switch (cmd) {
+                case 'F':  // 从核上报: 火焰警报
+                    slave_flame_alert = true;
+                    cout << "[SLAVE] 火焰警报!" << endl;
+                    break;
+                case 'f':  // 从核上报: 火焰解除
+                    slave_flame_alert = false;
+                    cout << "[SLAVE] 火焰解除" << endl;
+                    break;
+                case 'h':  // 从核心跳回复
+                    // 心跳正常，无需处理
+                    break;
+                default:
+                    // 其他回显数据，忽略
+                    break;
+            }
+        }
+    }
+}
+
+// 获取从核上报的火焰状态
+bool isSlaveFlameAlert() {
+    return slave_flame_alert;
+}
+
+// 发送心跳请求给从核
+void sendHeartbeat() {
+    sendCmd('H');
 }
 
 void shutdownHardware() {

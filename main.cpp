@@ -141,11 +141,19 @@ int main() {
             cout << "[INFO] 截图保存: " << path << endl;
         }
 
-        // 火焰检测
-        if (isFlameDetected()) {
+        // 火焰检测（主核 GPIO 直读 + 从核 RPMsg 上报，双重检测）
+        pollSlaveMessages();  // 读取从核上报消息
+        bool flame_local = isFlameDetected();
+        bool flame_slave = isSlaveFlameAlert();
+        bool flame_detected = flame_local || flame_slave;
+
+        if (flame_detected) {
             if (!fire_triggered) {
                 fire_triggered = true;
                 cout << "[FIRE] 火焰检测到！" << endl;
+                if (flame_slave && !flame_local) {
+                    cout << "  (由从核上报)" << endl;
+                }
             }
             setLed('R');
             setBuzzer(true);

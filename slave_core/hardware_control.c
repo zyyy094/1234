@@ -6,6 +6,7 @@
  *   LED 黄   - FGPIO4, PIN 14
  *   LED 绿   - FGPIO4, PIN 15
  *   蜂鸣器   - PWM2, Channel 0 (PDF 手册 PIN32 BUZZER)
+ *   火焰传感器 DO 口 - 引脚7 = FGPIO2, PIN 10 (低电平有效)
  *
  * 直接操作 GPIO 寄存器，无需 Linux 驱动
  */
@@ -28,13 +29,18 @@
 #define HW_DEBUG_E(format, ...) FT_DEBUG_PRINT_E(HW_DEBUG_TAG, format, ##__VA_ARGS__)
 
 /* ====================== GPIO 引脚定义 ====================== */
-/* 飞腾派: FGPIO4 模块, 引脚 13/14/15 用于 LED */
+/* LED: FGPIO4 模块, 引脚 13/14/15 */
 #define LED_GPIO_BASE    FGPIO4_BASE_ADDR
 #define LED_GPIO_CTRL    FGPIO_CTRL_4
 
 #define LED_RED_PIN      FGPIO_PIN_13
 #define LED_YEL_PIN      FGPIO_PIN_14
 #define LED_GRN_PIN      FGPIO_PIN_15
+
+/* 火焰传感器: FGPIO2 模块, 引脚 10 (引脚7, DO口) */
+#define FLAME_GPIO_BASE  FGPIO2_BASE_ADDR
+#define FLAME_GPIO_CTRL  FGPIO_CTRL_2
+#define FLAME_PIN        FGPIO_PIN_10
 
 /* ====================== PWM 定义 ====================== */
 #define BUZZER_PWM_ID    FPWM2_ID        /* PWM2 */
@@ -52,6 +58,13 @@ static void gpio_set_output(u32 pin)
     FGpioWriteReg32(LED_GPIO_BASE, FGPIO_SWPORTA_DDR_OFFSET, val);
 }
 
+static void gpio_set_input(u32 base, u32 pin)
+{
+    u32 val = FGpioReadReg32(base, FGPIO_SWPORTA_DDR_OFFSET);
+    val &= ~BIT(pin);  /* 0 = input */
+    FGpioWriteReg32(base, FGPIO_SWPORTA_DDR_OFFSET, val);
+}
+
 static void gpio_set_high(u32 pin)
 {
     u32 val = FGpioReadReg32(LED_GPIO_BASE, FGPIO_SWPORTA_DR_OFFSET);
@@ -64,6 +77,12 @@ static void gpio_set_low(u32 pin)
     u32 val = FGpioReadReg32(LED_GPIO_BASE, FGPIO_SWPORTA_DR_OFFSET);
     val &= ~BIT(pin);
     FGpioWriteReg32(LED_GPIO_BASE, FGPIO_SWPORTA_DR_OFFSET, val);
+}
+
+static int gpio_read_input(u32 base, u32 pin)
+{
+    u32 val = FGpioReadReg32(base, FGPIO_EXT_PORTA_OFFSET);
+    return (val & BIT(pin)) ? 1 : 0;
 }
 
 /* ====================== LED 控制 ====================== */
@@ -96,6 +115,14 @@ void buzzer_off(void)
     }
 }
 
+/* ====================== 火焰传感器读取 ====================== */
+int flame_sensor_read(void)
+{
+    /* 火焰传感器: 有火焰时输出低电平(0), 无火焰时高电平(1) */
+    int raw = gpio_read_input(FLAME_GPIO_BASE, FLAME_PIN);
+    return (raw == 0) ? 1 : 0;  /* 低电平 = 有火焰 */
+}
+
 /* ====================== 初始化 ====================== */
 int hardware_init(void)
 {
@@ -104,7 +131,7 @@ int hardware_init(void)
     /* 1. 初始化 IO 复用 */
     FIOMuxInit();
 
-    /* 2. 配置 LED GPIO 引脚 */
+    /* 2. 配置 LED GPIO 引脚 (输出) */
     FIOPadSetGpioMux(LED_GPIO_CTRL, LED_RED_PIN);
     FIOPadSetGpioMux(LED_GPIO_CTRL, LED_YEL_PIN);
     FIOPadSetGpioMux(LED_GPIO_CTRL, LED_GRN_PIN);
@@ -116,7 +143,12 @@ int hardware_init(void)
     led_all_off();
     HW_DEBUG_I("LED GPIO initialized (FGPIO4 pin 13/14/15)");
 
-    /* 3. 初始化 PWM 蜂鸣器 */
+    /* 3. 配置火焰传感器 GPIO 引脚 (输入) */
+    FIOPadSetGpioMux(FLAME_GPIO_CTRL, FLAME_PIN);
+    gpio_set_input(FLAME_GPIO_BASE, FLAME_PIN);
+    HW_DEBUG_I("Flame sensor initialized (FGPIO2 pin 10)");
+
+    /* 4. 初始化 PWM 蜂鸣器 */
     FIOPadSetPwmMux(BUZZER_PWM_ID, BUZZER_PWM_CH);
 
     memset(&pwm_ctrl, 0, sizeof(pwm_ctrl));
@@ -147,7 +179,7 @@ int hardware_init(void)
     pwm_initialized = 1;
     HW_DEBUG_I("PWM buzzer initialized (PWM2 CH0, 2kHz 50%%)");
 
-    /* 4. 开机指示: 绿灯闪一下 */
+    /* 5. 开机指示: 绿灯闪一下 */
     led_green_on();
     fsleep_millisec(200);
     led_green_off();
