@@ -1,0 +1,23 @@
+# 构建产物
+build/
+
+# 编译输出
+fire_detect
+*.exe
+*.out
+
+# 压缩包
+*.tgz
+*.tar.gz
+*.zip
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
