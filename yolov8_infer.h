@@ -14,7 +14,7 @@ public:
 
 private:
     Ort::Env env;
-    Ort::Session session;
+    Ort::Session session{nullptr};
     std::vector<float> preprocess(const cv::Mat& frame);
     std::vector<Detection> postprocess(float* output, int img_w, int img_h);
 };

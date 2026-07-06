@@ -81,7 +81,7 @@ int main() {
     signal(SIGINT, signalHandler);
     last_buzzer_toggle = chrono::steady_clock::now();
 
-    system("mkdir -p /home/user/captured");
+    system("mkdir -p captures");
 
     if (!initFlameSensor()) return -1;
     initRpmsg();
@@ -135,7 +135,7 @@ int main() {
             detection_started = true;
             cout << "[INFO] 检测启动" << endl;
         } else if (key == 'p') {
-            string path = "/home/user/captured/img_" + getCurrentTimestamp() + ".jpg";
+            string path = "captures/img_" + getCurrentTimestamp() + ".jpg";
             imwrite(path, frame);
             photo_count++;
             cout << "[INFO] 截图保存: " << path << endl;
@@ -248,7 +248,7 @@ int main() {
                     cur_state = OCCUPIED;
                     setLed('R');
                     cout << "[ALERT] 报警!" << endl;
-                    string snap = "occupied_" + to_string(time(nullptr)) + ".jpg";
+                    string snap = "captures/occupied_" + to_string(time(nullptr)) + ".jpg";
                     imwrite(snap, frame);
                 } else {
                     setLed('Y');

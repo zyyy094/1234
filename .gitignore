@@ -1,10 +1,14 @@
 # 构建产物
 build/
+captures/
 
 # 编译输出
 fire_detect
 *.exe
 *.out
+*.elf
+*.o
+*.a
 
 # 压缩包
 *.tgz
@@ -21,3 +25,14 @@ fire_detect
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# SDK（体积过大，不入库）
+phytium-standalone-sdk/
+
+# PDF/DOCX 文档（大文件）
+*.pdf
+*.docx
+
+# 临时文件
+_*.txt
+*.tmp
