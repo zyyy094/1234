@@ -2,10 +2,10 @@
  * hardware_control.c - 裸机硬件控制实现
  *
  * 飞腾派 PE2204 引脚分配:
- *   LED 红   - FGPIO4, PIN 13  (与 SDK 示例一致)
- *   LED 黄   - FGPIO4, PIN 14
- *   LED 绿   - FGPIO4, PIN 15
- *   蜂鸣器   - PWM2, Channel 0 (PDF 手册 PIN32 BUZZER)
+ *   LED 红   - FGPIO4, PIN 13  (引脚 22)
+ *   LED 黄   - FGPIO4, PIN 14  (引脚 18)
+ *   LED 绿   - FGPIO4, PIN 15  (引脚 15)
+ *   蜂鸣器   - PWM2, Channel 0 (引脚 32, J1 PIN_32)
  *   火焰传感器 DO 口 - 引脚7 = FGPIO2, PIN 10 (低电平有效)
  *
  * 直接操作 GPIO 寄存器，无需 Linux 驱动
@@ -43,7 +43,8 @@
 #define FLAME_PIN        FGPIO_PIN_10
 
 /* ====================== PWM 定义 ====================== */
-#define BUZZER_PWM_ID    FPWM2_ID        /* PWM2 */
+/* PE2204: PWM2_OUT 信号对应 FPWM1_ID channel 0, 引脚 J1 PIN_32 */
+#define BUZZER_PWM_ID    FPWM1_ID        /* SDK 中 FPWM1 对应 PWM2_OUT */
 #define BUZZER_PWM_CH    0               /* Channel 0 */
 
 static FPwmCtrl pwm_ctrl;
