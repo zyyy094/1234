@@ -21,7 +21,7 @@ import json
 import time
 import glob
 import subprocess
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime
 
@@ -29,6 +29,7 @@ from datetime import datetime
 PROJECT_DIR = '/home/user/fire_detect_project'
 CAPTURES_DIR = os.path.join(PROJECT_DIR, 'captures')
 STATUS_FILE = os.path.join(PROJECT_DIR, 'status.json')
+STREAM_FILE = os.path.join(PROJECT_DIR, 'stream.jpg')
 LOG_FILE = os.path.join(PROJECT_DIR, 'fire_detect.log')
 PORT = 8080
 
@@ -141,6 +142,14 @@ body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans CJK SC
 <div id="flame-alert" style="display:none;margin-top:12px;color:#ff4444;font-weight:bold;">
 ⚠ 检测到火焰！蜂鸣器已启动
 </div>
+</div>
+
+<!-- 实时视频流 -->
+<div class="card">
+<div class="card-title">实时视频流</div>
+<img id="video-stream" src="/api/stream" style="width:100%;border-radius:8px;background:#000;"
+     alt="实时视频流" onerror="this.style.opacity=0.3">
+<div style="text-align:center;color:#666;font-size:12px;margin-top:8px;">约 5fps · 自动刷新</div>
 </div>
 
 <!-- 数据指标 -->
@@ -274,6 +283,36 @@ class FireHandler(BaseHTTPRequestHandler):
             log = get_log_tail()
             self.send_data(log, 'text/plain; charset=utf-8')
 
+        elif path == '/api/stream':
+            # MJPG 实时视频流（multipart/x-mixed-replace）
+            self.send_response(200)
+            self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
+            self.send_header('Cache-Control', 'no-cache, private')
+            self.send_header('Pragma', 'no-cache')
+            self.end_headers()
+            try:
+                while True:
+                    if os.path.exists(STREAM_FILE):
+                        with open(STREAM_FILE, 'rb') as f:
+                            frame_data = f.read()
+                        if frame_data:
+                            self.wfile.write(b'--frame\r\n')
+                            self.wfile.write(b'Content-Type: image/jpeg\r\n\r\n')
+                            self.wfile.write(frame_data)
+                            self.wfile.write(b'\r\n')
+                    time.sleep(0.2)  # 5fps
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # 客户端断开
+
+        elif path == '/api/snapshot':
+            # 单帧快照
+            if os.path.exists(STREAM_FILE):
+                with open(STREAM_FILE, 'rb') as f:
+                    data = f.read()
+                self.send_data(data, 'image/jpeg')
+            else:
+                self.send_data('Not Found', 'text/plain', 404)
+
         elif path.startswith('/captures/'):
             filename = os.path.basename(path)
             filepath = os.path.join(CAPTURES_DIR, filename)
@@ -296,7 +335,7 @@ def main():
 
     os.makedirs(CAPTURES_DIR, exist_ok=True)
 
-    server = HTTPServer(('0.0.0.0', port), FireHandler)
+    server = ThreadingHTTPServer(('0.0.0.0', port), FireHandler)
     print(f'========================================')
     print(f' 消防通道检测系统 - Web 服务器')
     print(f'========================================')

@@ -1,0 +1,13 @@
+[Unit]
+Description=OpenAMP Slave Core Init
+After=systemd-modules-load.service
+Before=fire-detect.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/user/fire_detect_project/scripts/openamp-start.sh
+RemainAfterExit=yes
+TimeoutStartSec=15
+
+[Install]
+WantedBy=multi-user.target

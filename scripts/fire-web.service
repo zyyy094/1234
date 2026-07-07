@@ -1,0 +1,15 @@
+[Unit]
+Description=Fire Detect Web Server
+After=fire-detect.service
+Wants=fire-detect.service
+
+[Service]
+Type=simple
+User=user
+WorkingDirectory=/home/user/fire_detect_project
+ExecStart=/usr/bin/python3 /home/user/fire_detect_project/web_server/fire_web_server.py 8080
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

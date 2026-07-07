@@ -15,8 +15,15 @@ public:
 private:
     Ort::Env env;
     Ort::Session session{nullptr};
+
+    // Letterbox 预处理参数
+    float m_scale = 1.0f;
+    int m_pad_x = 0;
+    int m_pad_y = 0;
+
     std::vector<float> preprocess(const cv::Mat& frame);
-    std::vector<Detection> postprocess(float* output, int img_w, int img_h);
+    std::vector<Detection> postprocess(const float* output, int orig_w, int orig_h,
+                                       int num_anchors, int num_classes, int layout);
 };
 
 #endif

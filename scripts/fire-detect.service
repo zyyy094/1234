@@ -1,0 +1,20 @@
+[Unit]
+Description=Fire Lane Detection System
+After=openamp-init.service
+Wants=openamp-init.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/user/fire_detect_project
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/user/.Xauthority
+Environment=LD_LIBRARY_PATH=thirdparty/onnxruntime/lib
+ExecStart=/home/user/fire_detect_project/build/fire_detect
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/user/fire_detect_project/fire_detect.log
+StandardError=append:/home/user/fire_detect_project/fire_detect.log
+
+[Install]
+WantedBy=multi-user.target

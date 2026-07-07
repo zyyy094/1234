@@ -3,6 +3,7 @@
 #include <iostream>
 #include <chrono>
 #include <fstream>
+#include <vector>
 
 #include "common.h"
 #include "hardware.h"
@@ -33,6 +34,12 @@ YOLOv8Infer detector;
 
 // 程序启动时间（用于计算运行时长）
 chrono::steady_clock::time_point program_start = chrono::steady_clock::now();
+
+// status.json 最后写入时间（降频：每秒写一次而非每帧）
+chrono::steady_clock::time_point last_status_write;
+
+// MJPG 推流帧最后写入时间（降频：每 200ms 一帧）
+chrono::steady_clock::time_point last_stream_write;
 
 // ====================== 静态目标过滤 ======================
 vector<Detection> filterStaticDetections(const vector<Detection>& dets) {
@@ -84,6 +91,8 @@ void signalHandler(int sig) {
 int main() {
     signal(SIGINT, signalHandler);
     last_buzzer_toggle = chrono::steady_clock::now();
+    last_status_write = chrono::steady_clock::now();
+    last_stream_write = chrono::steady_clock::now();
 
     system("mkdir -p captures");
 
@@ -279,8 +288,8 @@ int main() {
 
         int fps = (int)(1.0 / chrono::duration<double>(chrono::steady_clock::now() - loop_start).count());
 
-        // 写入状态文件供 Web 服务器读取
-        {
+        // 写入状态文件供 Web 服务器读取（降频：每秒一次）
+        if (chrono::duration<double>(chrono::steady_clock::now() - last_status_write).count() >= 1.0) {
             double uptime = chrono::duration<double>(chrono::steady_clock::now() - program_start).count();
             string state_str, state_color;
             if (flame_detected) { state_str = "FIRE"; state_color = "#ff1744"; }
@@ -306,10 +315,21 @@ int main() {
             sf << "\"timestamp\":\"" << ts << "\"";
             sf << "}";
             sf.close();
+            last_status_write = chrono::steady_clock::now();
         }
 
         drawOverlay(frame, cur_state, fps, false, countdown, stable_sec);
         imshow("Fire Lane Detection", frame);
+
+        // 写入 MJPG 推流帧（每 200ms 一帧，约 5fps）
+        if (chrono::duration<double>(chrono::steady_clock::now() - last_stream_write).count() >= 0.2) {
+            vector<uchar> buf;
+            imencode(".jpg", frame, buf, {IMWRITE_JPEG_QUALITY, 60});
+            ofstream sf("stream.jpg", ios::binary);
+            sf.write((char*)buf.data(), buf.size());
+            sf.close();
+            last_stream_write = chrono::steady_clock::now();
+        }
     }
 
     shutdownHardware();
