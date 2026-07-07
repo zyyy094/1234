@@ -2,6 +2,7 @@
 #include <signal.h>
 #include <iostream>
 #include <chrono>
+#include <fstream>
 
 #include "common.h"
 #include "hardware.h"
@@ -29,6 +30,9 @@ int consecutive_detection_count = 0;
 int consecutive_no_detection_count = 0;
 
 YOLOv8Infer detector;
+
+// 程序启动时间（用于计算运行时长）
+chrono::steady_clock::time_point program_start = chrono::steady_clock::now();
 
 // ====================== 静态目标过滤 ======================
 vector<Detection> filterStaticDetections(const vector<Detection>& dets) {
@@ -274,6 +278,36 @@ int main() {
         }
 
         int fps = (int)(1.0 / chrono::duration<double>(chrono::steady_clock::now() - loop_start).count());
+
+        // 写入状态文件供 Web 服务器读取
+        {
+            double uptime = chrono::duration<double>(chrono::steady_clock::now() - program_start).count();
+            string state_str, state_color;
+            if (flame_detected) { state_str = "FIRE"; state_color = "#ff1744"; }
+            else switch (cur_state) {
+                case IDLE:     state_str = "MONITORING"; state_color = "#2ecc71"; break;
+                case WARNING:  state_str = "WARNING";    state_color = "#f39c12"; break;
+                case OCCUPIED: state_str = "OCCUPIED";   state_color = "#e74c3c"; break;
+            }
+            time_t now = time(nullptr);
+            char ts[64];
+            strftime(ts, sizeof(ts), "%H:%M:%S", localtime(&now));
+
+            ofstream sf("status.json");
+            sf << "{";
+            sf << "\"state\":\"" << state_str << "\",";
+            sf << "\"state_color\":\"" << state_color << "\",";
+            sf << "\"fps\":" << fps << ",";
+            sf << "\"photo_count\":" << photo_count << ",";
+            sf << "\"flame_detected\":" << (flame_detected ? "true" : "false") << ",";
+            sf << "\"timer\":" << stable_sec << ",";
+            sf << "\"countdown\":" << countdown << ",";
+            sf << "\"uptime\":" << (int)uptime << ",";
+            sf << "\"timestamp\":\"" << ts << "\"";
+            sf << "}";
+            sf.close();
+        }
+
         drawOverlay(frame, cur_state, fps, false, countdown, stable_sec);
         imshow("Fire Lane Detection", frame);
     }
