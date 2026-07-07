@@ -1,25 +1,30 @@
 #ifndef HARDWARE_H
 #define HARDWARE_H
 
-// ====================== 火焰传感器（主核直读） ======================
+#include "fire_protocol.h"
+
+// ====================== 火焰传感器（主核直读，兼容模式） ======================
 bool initFlameSensor();
 bool isFlameDetected();
 void releaseFlameSensor();
 
 // ====================== RPMsg 通信（主→从） ======================
 bool initRpmsg();
-void sendCmd(char cmd);
-void setLed(char color);
+// 发送状态指令（G/Y/R/F/S），从核自动设置LED+蜂鸣器
+void sendState(char state_cmd);
+// 独立蜂鸣器控制
 void setBuzzer(bool on);
+// 紧急停止
 void shutdownHardware();
 void closeRpmsg();
 
 // ====================== 从核回传数据接收（从→主） ======================
-// 非阻塞读取从核上报的消息（火焰警报/心跳等）
 void pollSlaveMessages();
-// 获取从核上报的火焰状态
 bool isSlaveFlameAlert();
-// 发送心跳请求给从核
+bool isSlaveAlive();
+
+// 心跳管理
 void sendHeartbeat();
+void updateHeartbeat();
 
 #endif

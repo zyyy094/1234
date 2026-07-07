@@ -5,8 +5,10 @@
 #include <unistd.h>
 #include <iostream>
 #include <poll.h>
+#include <chrono>
 
 using namespace std;
+using namespace chrono;
 
 // ====================== GPIO 火焰传感器（主核直读，兼容模式） ======================
 static struct gpiod_chip* g_chip = nullptr;
@@ -47,9 +49,12 @@ void releaseFlameSensor() {
     if (g_chip) { gpiod_chip_close(g_chip); g_chip = nullptr; }
 }
 
-// ====================== RPMsg ======================
+// ====================== RPMsg 通信 ======================
 static int rpmsg_fd = -1;
-static bool slave_flame_alert = false;  // 从核上报的火焰状态
+static bool slave_flame_alert = false;
+static bool slave_alive = false;
+static steady_clock::time_point last_heartbeat_send;
+static steady_clock::time_point last_heartbeat_ack;
 
 bool initRpmsg() {
     rpmsg_fd = open("/dev/rpmsg0", O_RDWR);
@@ -61,35 +66,43 @@ bool initRpmsg() {
         }
     }
     if (rpmsg_fd < 0) {
-        cerr << "[WARN] 无法打开 rpmsg 设备" << endl;
+        cerr << "[WARN] 无法打开 rpmsg 设备，从核控制不可用" << endl;
         return false;
     }
+    slave_alive = true;
+    last_heartbeat_send = steady_clock::now();
+    last_heartbeat_ack = steady_clock::now();
+    cout << "[INFO] RPMsg 通信就绪 (/dev/rpmsg0)" << endl;
     return true;
 }
 
-void sendCmd(char cmd) {
+// 发送状态指令：G/Y/R/F/S，从核收到后自动设置 LED + 蜂鸣器模式
+void sendState(char state_cmd) {
     if (rpmsg_fd >= 0) {
-        write(rpmsg_fd, &cmd, 1);
+        write(rpmsg_fd, &state_cmd, 1);
         usleep(1000);
     }
 }
 
-void setLed(char color) {
-    sendCmd('r');
-    sendCmd('y');
-    sendCmd('g');
-    if (color == 'R') sendCmd('R');
-    else if (color == 'Y') sendCmd('Y');
-    else if (color == 'G') sendCmd('G');
+// 独立蜂鸣器控制
+void setBuzzer(bool on) {
+    sendState(on ? CMD_BUZZER_ON : CMD_BUZZER_OFF);
 }
 
-void setBuzzer(bool on) {
-    sendCmd(on ? 'B' : 'b');
+// 紧急停止：发 S 全关
+void shutdownHardware() {
+    sendState(CMD_EMERGENCY_STOP);
+    usleep(50000);
+}
+
+void closeRpmsg() {
+    if (rpmsg_fd >= 0) {
+        close(rpmsg_fd);
+        rpmsg_fd = -1;
+    }
 }
 
 // ====================== 从核回传数据接收 ======================
-
-// 非阻塞读取从核上报的消息
 void pollSlaveMessages() {
     if (rpmsg_fd < 0) return;
 
@@ -105,46 +118,47 @@ void pollSlaveMessages() {
         for (ssize_t i = 0; i < n; i++) {
             char cmd = buf[i];
             switch (cmd) {
-                case 'F':  // 从核上报: 火焰警报
+                case CMD_FIRE_ALERT:  // 'F' 从核上报火焰
                     slave_flame_alert = true;
-                    cout << "[SLAVE] 火焰警报!" << endl;
+                    cout << "[SLAVE→MASTER] 火焰警报上报!" << endl;
                     break;
-                case 'f':  // 从核上报: 火焰解除
+                case CMD_FIRE_CLEAR:  // 'f' 从核上报火焰解除
                     slave_flame_alert = false;
-                    cout << "[SLAVE] 火焰解除" << endl;
+                    cout << "[SLAVE→MASTER] 火焰解除" << endl;
                     break;
-                case 'h':  // 从核心跳回复
-                    // 心跳正常，无需处理
+                case CMD_HEARTBEAT_ACK:  // 'h' 心跳回复
+                    slave_alive = true;
+                    last_heartbeat_ack = steady_clock::now();
                     break;
                 default:
-                    // 其他回显数据，忽略
+                    // 回显数据或其他，忽略
                     break;
             }
         }
     }
 }
 
-// 获取从核上报的火焰状态
-bool isSlaveFlameAlert() {
-    return slave_flame_alert;
-}
+bool isSlaveFlameAlert() { return slave_flame_alert; }
+bool isSlaveAlive() { return slave_alive; }
 
-// 发送心跳请求给从核
+// ====================== 心跳管理 ======================
 void sendHeartbeat() {
-    sendCmd('H');
+    sendState(CMD_HEARTBEAT);
+    last_heartbeat_send = steady_clock::now();
 }
 
-void shutdownHardware() {
-    setLed('r');
-    setLed('y');
-    setLed('g');
-    setBuzzer(false);
-    usleep(100000);
-}
-
-void closeRpmsg() {
-    if (rpmsg_fd >= 0) {
-        close(rpmsg_fd);
-        rpmsg_fd = -1;
+void updateHeartbeat() {
+    // 检查心跳超时
+    double since_ack = duration<double>(steady_clock::now() - last_heartbeat_ack).count();
+    if (since_ack > HEARTBEAT_TIMEOUT_SEC) {
+        if (slave_alive) {
+            cerr << "[WARN] 从核心跳超时 (" << (int)since_ack << "s)，判定离线" << endl;
+            slave_alive = false;
+        }
+    }
+    // 定期发送心跳
+    double since_send = duration<double>(steady_clock::now() - last_heartbeat_send).count();
+    if (since_send >= HEARTBEAT_INTERVAL_SEC) {
+        sendHeartbeat();
     }
 }
