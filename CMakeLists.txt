@@ -17,8 +17,6 @@ set(SOURCES
     main.cpp
     common.cpp
     hardware.cpp
-    bg_subtract.cpp
-    ui_draw.cpp
     yolov8_infer.cpp
 )
 

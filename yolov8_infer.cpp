@@ -13,7 +13,8 @@ YOLOv8Infer::~YOLOv8Infer() {}
 
 bool YOLOv8Infer::loadModel(const string& model_path) {
     Ort::SessionOptions opts;
-    opts.SetIntraOpNumThreads(2);
+    opts.SetIntraOpNumThreads(1);
+    opts.SetInterOpNumThreads(1);
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     try {
         session = Ort::Session(env, model_path.c_str(), opts);

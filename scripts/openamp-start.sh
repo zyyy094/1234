@@ -4,6 +4,18 @@
 
 set -e
 
+# 0. 预启动: 禁用 PWM2 输出，防止蜂鸣器一上电就响
+# PIN_32 = PWM2_OUT = FPWM1 channel 0
+if [ -d /sys/class/pwm/pwmchip0 ]; then
+    echo 0 > /sys/class/pwm/pwmchip0/export 2>/dev/null || true
+    echo 0 > /sys/class/pwm/pwmchip0/pwm0/enable 2>/dev/null || true
+    echo "[openamp] PWM2 已禁用"
+fi
+
+# 确保从核停在安全状态（如果之前已启动）
+echo stop > /sys/class/remoteproc/remoteproc0/state 2>/dev/null || true
+sleep 1
+
 # 1. 启动从核固件
 echo start > /sys/class/remoteproc/remoteproc0/state
 sleep 2

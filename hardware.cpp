@@ -1,3 +1,16 @@
+/*
+ * hardware.cpp - 主核硬件抽象层
+ *
+ * 架构说明（严格遵循异构双核设计）:
+ *   主核(Linux): AI视觉推理 + 业务逻辑 + RPMsg通信
+ *   从核(裸机): 火焰感知 + LED/蜂鸣器实时驱动 + 实时警示
+ *
+ * 主核职责:
+ *   1. 火焰传感器GPIO直读（双链路校验，与从核上报做OR判断）
+ *   2. 通过RPMsg向从核发送状态指令(G/Y/R/F/S/B/b/H)
+ *   3. 接收从核回传的火焰警报(F/f)和心跳(h)
+ *   4. 不直接控制LED和蜂鸣器（由从核负责实时警示）
+ */
 #include "hardware.h"
 #include "common.h"
 #include <gpiod.h>
@@ -10,21 +23,21 @@
 using namespace std;
 using namespace chrono;
 
-// ====================== GPIO 火焰传感器（主核直读，兼容模式） ======================
+// ====================== 火焰传感器 GPIO 直读（主核，双链路校验） ======================
 static struct gpiod_chip* g_chip = nullptr;
 static struct gpiod_line* g_line = nullptr;
 
 bool initFlameSensor() {
     g_chip = gpiod_chip_open_by_number(FLAME_CHIP);
     if (!g_chip) {
-        cerr << "[ERROR] 打开GPIO芯片失败" << endl;
+        cerr << "[WARN] 火焰传感器GPIO芯片打开失败（仅依赖从核上报）" << endl;
         return false;
     }
     g_line = gpiod_chip_get_line(g_chip, FLAME_LINE);
     if (!g_line) {
         gpiod_chip_close(g_chip);
         g_chip = nullptr;
-        cerr << "[ERROR] 获取GPIO引脚失败" << endl;
+        cerr << "[WARN] 火焰传感器GPIO引脚获取失败" << endl;
         return false;
     }
     if (gpiod_line_request_input(g_line, "flame_sensor") < 0) {
@@ -32,16 +45,16 @@ bool initFlameSensor() {
         gpiod_chip_close(g_chip);
         g_chip = nullptr;
         g_line = nullptr;
-        cerr << "[ERROR] GPIO输入模式申请失败" << endl;
+        cerr << "[WARN] 火焰传感器GPIO输入模式申请失败" << endl;
         return false;
     }
-    cout << "[INFO] 火焰传感器初始化成功" << endl;
+    cout << "[INFO] 火焰传感器主核直读初始化成功(gpiochip" << FLAME_CHIP << " line" << FLAME_LINE << ")" << endl;
     return true;
 }
 
 bool isFlameDetected() {
     if (!g_line) return false;
-    return gpiod_line_get_value(g_line) == 0;
+    return gpiod_line_get_value(g_line) == 0;  // 低电平有效
 }
 
 void releaseFlameSensor() {
@@ -49,7 +62,7 @@ void releaseFlameSensor() {
     if (g_chip) { gpiod_chip_close(g_chip); g_chip = nullptr; }
 }
 
-// ====================== RPMsg 通信 ======================
+// ====================== RPMsg 通信（主核 <-> 从核） ======================
 static int rpmsg_fd = -1;
 static bool slave_flame_alert = false;
 static bool slave_alive = false;
@@ -66,7 +79,7 @@ bool initRpmsg() {
         }
     }
     if (rpmsg_fd < 0) {
-        cerr << "[WARN] 无法打开 rpmsg 设备，从核控制不可用" << endl;
+        cerr << "[WARN] 无法打开 rpmsg 设备，从核通信不可用" << endl;
         return false;
     }
     slave_alive = true;
@@ -76,7 +89,8 @@ bool initRpmsg() {
     return true;
 }
 
-// 发送状态指令：G/Y/R/F/S，从核收到后自动设置 LED + 蜂鸣器模式
+// 发送状态指令到从核：G/Y/R/F/S/B/b/H
+// 从核收到后自动控制LED和蜂鸣器
 void sendState(char state_cmd) {
     if (rpmsg_fd >= 0) {
         write(rpmsg_fd, &state_cmd, 1);
@@ -84,12 +98,12 @@ void sendState(char state_cmd) {
     }
 }
 
-// 独立蜂鸣器控制
+// 独立蜂鸣器控制（通过RPMsg发B/b命令）
 void setBuzzer(bool on) {
     sendState(on ? CMD_BUZZER_ON : CMD_BUZZER_OFF);
 }
 
-// 紧急停止：发 S 全关
+// 紧急停止
 void shutdownHardware() {
     sendState(CMD_EMERGENCY_STOP);
     usleep(50000);
@@ -100,6 +114,13 @@ void closeRpmsg() {
         close(rpmsg_fd);
         rpmsg_fd = -1;
     }
+}
+
+// ====================== 蜂鸣器间歇更新（主循环调用，但实际由从核硬件处理）======================
+// 注意：从核固件已内置间歇蜂鸣逻辑（500ms切换），主核只需发送'R'命令，
+// 从核自动处理间歇模式。此函数保留为兼容接口，无需额外操作。
+void updateBuzzer() {
+    // 从核自动处理间歇蜂鸣，主核无需操作
 }
 
 // ====================== 从核回传数据接收 ======================
@@ -118,20 +139,19 @@ void pollSlaveMessages() {
         for (ssize_t i = 0; i < n; i++) {
             char cmd = buf[i];
             switch (cmd) {
-                case CMD_FIRE_ALERT:  // 'F' 从核上报火焰
+                case CMD_FIRE_ALERT:
                     slave_flame_alert = true;
                     cout << "[SLAVE→MASTER] 火焰警报上报!" << endl;
                     break;
-                case CMD_FIRE_CLEAR:  // 'f' 从核上报火焰解除
+                case CMD_FIRE_CLEAR:
                     slave_flame_alert = false;
                     cout << "[SLAVE→MASTER] 火焰解除" << endl;
                     break;
-                case CMD_HEARTBEAT_ACK:  // 'h' 心跳回复
+                case CMD_HEARTBEAT_ACK:
                     slave_alive = true;
                     last_heartbeat_ack = steady_clock::now();
                     break;
                 default:
-                    // 回显数据或其他，忽略
                     break;
             }
         }
@@ -148,7 +168,6 @@ void sendHeartbeat() {
 }
 
 void updateHeartbeat() {
-    // 检查心跳超时
     double since_ack = duration<double>(steady_clock::now() - last_heartbeat_ack).count();
     if (since_ack > HEARTBEAT_TIMEOUT_SEC) {
         if (slave_alive) {
@@ -156,7 +175,6 @@ void updateHeartbeat() {
             slave_alive = false;
         }
     }
-    // 定期发送心跳
     double since_send = duration<double>(steady_clock::now() - last_heartbeat_send).count();
     if (since_send >= HEARTBEAT_INTERVAL_SEC) {
         sendHeartbeat();

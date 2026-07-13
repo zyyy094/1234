@@ -61,7 +61,7 @@ slave_core/
 | LED 红 | FGPIO4 | PIN 13 | 高电平亮 |
 | LED 黄 | FGPIO4 | PIN 14 | 高电平亮 |
 | LED 绿 | FGPIO4 | PIN 15 | 高电平亮 |
-| 蜂鸣器 | PWM2 (FPWM1_ID) | CH0 (引脚 32) | 2kHz 50%占空比，无源蜂鸣器 |
+| 蜂鸣器 | FGPIO4 | PIN 10 (引脚 11) | GPIO高低电平控制，有源蜂鸣器 |
 
 ## 编译步骤
 
